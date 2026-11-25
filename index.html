@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visor 3D (.OBJ + .MTL)</title>
+    <title>Visor 3D Automático (.OBJ + .MTL)</title>
     <style>
         body {
             margin: 0;
@@ -27,11 +27,6 @@
         }
         h3 { margin: 0 0 8px 0; font-size: 16px; color: #38bdf8; }
         p { margin: 0 0 12px 0; font-size: 13px; color: #a1a1aa; line-height: 1.4; }
-        input[type="file"] {
-            width: 100%;
-            font-size: 13px;
-            color: #e4e4e7;
-        }
         #status {
             margin-top: 10px;
             font-size: 12px;
@@ -46,10 +41,9 @@
 <body>
 
     <div id="panel">
-        <h3>Visor 3D de Taller (.OBJ + .MTL)</h3>
-        <p>Seleccioná el archivo <b>.obj</b> y el <b>.mtl</b> juntos, o arrastralos a la pantalla.</p>
-        <input type="file" id="fileInput" accept=".obj,.mtl" multiple>
-        <div id="status">Esperando archivos...</div>
+        <h3>Visor 3D Automático</h3>
+        <p>Cargando modelo predeterminado del taller... También podés arrastrar otros archivos .obj/.mtl aquí.</p>
+        <div id="status">Iniciando carga automática...</div>
     </div>
 
     <div id="canvas-container"></div>
@@ -88,7 +82,7 @@
             controls = new OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
 
-            // Iluminación equilibrada
+            // Iluminación
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
             scene.add(ambientLight);
 
@@ -105,12 +99,10 @@
             gridHelper.position.y = -0.101;
             scene.add(gridHelper);
 
-            // Evento para botón de archivos
-            document.getElementById('fileInput').addEventListener('change', (e) => {
-                processFiles(e.target.files);
-            });
+            // CARGA AUTOMÁTICA AL ABRIR LA PÁGINA
+            loadDefaultModel('taller_1er_ano_tecnica.obj', 'taller_1er_ano_tecnica.mtl');
 
-            // Soporte para arrastrar y soltar (Drag & Drop)
+            // Soporte para arrastrar y soltar nuevos archivos si se desea
             window.addEventListener('dragover', (e) => e.preventDefault());
             window.addEventListener('drop', (e) => {
                 e.preventDefault();
@@ -123,30 +115,58 @@
             animate();
         }
 
+        // Función para cargar los archivos predeterminados del servidor/GitHub
+        function loadDefaultModel(objUrl, mtlUrl) {
+            statusEl.style.color = '#38bdf8';
+            statusEl.textContent = 'Cargando materiales (.mtl)...';
+
+            const mtlLoader = new MTLLoader();
+            mtlLoader.load(mtlUrl, (materials) => {
+                materials.preload();
+                statusEl.textContent = 'Cargando modelo 3D (.obj)...';
+
+                const objLoader = new OBJLoader();
+                objLoader.setMaterials(materials);
+                objLoader.load(objUrl, (object) => {
+                    displayModel(object, 'Taller 1° Año (Automático)');
+                }, undefined, (error) => {
+                    console.error(error);
+                    fallbackLoadObjOnly(objUrl);
+                });
+            }, undefined, (error) => {
+                console.warn('No se encontró el .mtl, cargando solo el .obj...', error);
+                fallbackLoadObjOnly(objUrl);
+            });
+        }
+
+        function fallbackLoadObjOnly(objUrl) {
+            const objLoader = new OBJLoader();
+            objLoader.load(objUrl, (object) => {
+                object.traverse((child) => {
+                    if (child.isMesh) {
+                        child.material = new THREE.MeshStandardMaterial({
+                            color: 0x38bdf8,
+                            roughness: 0.5,
+                            side: THREE.DoubleSide
+                        });
+                    }
+                });
+                displayModel(object, 'Modelo (Sin materiales)');
+            });
+        }
+
+        // Procesar archivos si el usuario arrastra otros nuevos
         async function processFiles(fileList) {
             const files = Array.from(fileList);
             const objFile = files.find(f => f.name.toLowerCase().endsWith('.obj'));
             const mtlFile = files.find(f => f.name.toLowerCase().endsWith('.mtl'));
 
-            if (!objFile) {
-                statusEl.style.color = '#f87171';
-                statusEl.textContent = 'Por favor incluí un archivo .obj';
-                return;
-            }
+            if (!objFile) return;
 
             const objText = await objFile.text();
             const mtlText = mtlFile ? await mtlFile.text() : null;
 
-            loadModel(objText, mtlText, objFile.name, !!mtlFile);
-        }
-
-        function loadModel(objText, mtlText, objName, hasMtl) {
-            if (currentMesh) {
-                scene.remove(currentMesh);
-            }
-
             const objLoader = new OBJLoader();
-
             if (mtlText) {
                 const mtlLoader = new MTLLoader();
                 const materials = mtlLoader.parse(mtlText, '');
@@ -155,27 +175,26 @@
             }
 
             const object = objLoader.parse(objText);
-
             object.traverse((child) => {
                 if (child.isMesh) {
-                    if (!hasMtl) {
-                        child.material = new THREE.MeshStandardMaterial({
-                            color: 0x38bdf8,
-                            roughness: 0.5,
-                            side: THREE.DoubleSide
-                        });
-                    } else if (Array.isArray(child.material)) {
-                        child.material.forEach(m => m.side = THREE.DoubleSide);
+                    if (!mtlText) {
+                        child.material = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.5, side: THREE.DoubleSide });
                     } else if (child.material) {
                         child.material.side = THREE.DoubleSide;
                     }
                 }
             });
 
+            displayModel(object, objFile.name);
+        }
+
+        function displayModel(object, name) {
+            if (currentMesh) {
+                scene.remove(currentMesh);
+            }
             currentMesh = object;
             scene.add(object);
 
-            // Encuadre automático del modelo en cámara
             const box = new THREE.Box3().setFromObject(object);
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
@@ -186,9 +205,7 @@
             controls.update();
 
             statusEl.style.color = '#4ade80';
-            statusEl.textContent = hasMtl 
-                ? `Cargado: ${objName} (con materiales)` 
-                : `Cargado: ${objName} (sin .mtl)`;
+            statusEl.textContent = `¡Cargado con éxito: ${name}!`;
         }
 
         function onWindowResize() {
